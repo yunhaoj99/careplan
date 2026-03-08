@@ -35,3 +35,7 @@ docker-compose.override.yml
 htmlcov/
 .coverage
 .pytest_cache/
+
+# Course materials (not part of the project)
+docs/careplan课程*
+docs/2sum_项目*
