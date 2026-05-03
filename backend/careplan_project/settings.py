@@ -38,6 +38,8 @@ DATABASES = {
 
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [],
     'UNAUTHENTICATED_USER': None,

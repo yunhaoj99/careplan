@@ -10,6 +10,11 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
   backend:
     build: ./backend
     ports:
@@ -21,8 +26,10 @@ services:
       DB_NAME: careplan
       DB_USER: careplan_user
       DB_PASSWORD: careplan_pass
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       - db
+      - redis
     volumes:
       - ./backend:/app
 

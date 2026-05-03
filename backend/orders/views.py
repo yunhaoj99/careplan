@@ -1,9 +1,12 @@
-import anthropic
+import redis
 from django.conf import settings
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .models import Patient, Provider, Order, CarePlan
+
+redis_client = redis.from_url(settings.REDIS_URL)
+QUEUE_NAME = 'careplan_queue'
 
 
 @api_view(['POST'])
@@ -36,52 +39,20 @@ def create_order(request):
         patient_records=data.get('patient_records', ''),
     )
 
-    care_plan = CarePlan.objects.create(order=order, status='processing')
+    care_plan = CarePlan.objects.create(order=order, status='pending')
 
-    try:
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-
-        prompt = f"""You are a clinical pharmacist. Generate a comprehensive pharmaceutical care plan based on the following patient information.
-
-Patient: {patient.first_name} {patient.last_name}
-MRN: {patient.mrn}
-DOB: {patient.dob}
-Primary Diagnosis: {order.primary_diagnosis}
-Additional Diagnoses: {order.additional_diagnoses}
-Current Medication: {order.medication_name}
-Medication History: {order.medication_history}
-Patient Records/Notes: {order.patient_records}
-
-Generate the care plan with EXACTLY these four sections:
-
-1. Problem List / Drug Therapy Problems (DTPs)
-2. Goals (SMART - Specific, Measurable, Achievable, Relevant, Time-bound)
-3. Pharmacist Interventions / Plan
-4. Monitoring Plan & Lab Schedule
-
-Be clinically specific. Include dosing considerations, potential drug interactions, and evidence-based recommendations."""
-
-        message = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        care_plan.content = message.content[0].text
-        care_plan.status = 'completed'
-    except Exception as e:
-        care_plan.status = 'failed'
-        care_plan.content = f"Failed to generate care plan: {e}"
-
-    care_plan.save()
+    # Push care_plan id into Redis queue for later processing
+    redis_client.lpush(QUEUE_NAME, care_plan.id)
 
     return Response({
         'id': order.id,
+        'care_plan_id': care_plan.id,
         'patient_first_name': patient.first_name,
         'patient_last_name': patient.last_name,
         'patient_mrn': patient.mrn,
         'medication_name': order.medication_name,
         'status': care_plan.status,
-        'care_plan': care_plan.content,
+        'care_plan': '',
     }, status=201)
 
 
