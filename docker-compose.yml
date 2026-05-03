@@ -1,10 +1,28 @@
 services:
+  db:
+    image: postgres:15
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: careplan
+      POSTGRES_USER: careplan_user
+      POSTGRES_PASSWORD: careplan_pass
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
   backend:
     build: ./backend
     ports:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      DB_HOST: db
+      DB_NAME: careplan
+      DB_USER: careplan_user
+      DB_PASSWORD: careplan_pass
+    depends_on:
+      - db
     volumes:
       - ./backend:/app
 
@@ -17,3 +35,6 @@ services:
       - /app/node_modules
     environment:
       - WATCHPACK_POLLING=true
+
+volumes:
+  pgdata:
