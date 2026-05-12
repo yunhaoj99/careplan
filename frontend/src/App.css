@@ -143,6 +143,28 @@ button:disabled {
   color: #ea4335;
 }
 
+.result.pending {
+  border-left: 4px solid #fbbc04;
+}
+
+.result.pending .status span {
+  color: #fbbc04;
+}
+
+.result.processing {
+  border-left: 4px solid #4285f4;
+}
+
+.result.processing .status span {
+  color: #4285f4;
+}
+
+.poll-indicator {
+  font-weight: 400;
+  font-size: 13px;
+  color: #888;
+}
+
 .result pre {
   white-space: pre-wrap;
   word-wrap: break-word;

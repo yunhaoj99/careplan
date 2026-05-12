@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import './App.css';
 
 function App() {
@@ -18,6 +18,41 @@ function App() {
 
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [polling, setPolling] = useState(false);
+  const [pollCount, setPollCount] = useState(0);
+  const timerRef = useRef(null);
+
+  const stopPolling = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    setPolling(false);
+  }, []);
+
+  const startPolling = useCallback((carePlanId) => {
+    setPolling(true);
+    setPollCount(0);
+
+    timerRef.current = setInterval(async () => {
+      setPollCount((prev) => prev + 1);
+      try {
+        const res = await fetch(`http://localhost:8000/api/careplan/${carePlanId}/status/`);
+        const data = await res.json();
+
+        if (data.status === 'completed' || data.status === 'failed') {
+          stopPolling();
+          setResult((prev) => ({
+            ...prev,
+            status: data.status,
+            care_plan: data.content || '',
+          }));
+        }
+      } catch (err) {
+        // Network error during polling — keep trying
+      }
+    }, 3000);
+  }, [stopPolling]);
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -27,6 +62,7 @@ function App() {
     e.preventDefault();
     setLoading(true);
     setResult(null);
+    stopPolling();
 
     try {
       const response = await fetch('http://localhost:8000/api/orders/', {
@@ -36,9 +72,13 @@ function App() {
       });
       const data = await response.json();
       setResult(data);
+      setLoading(false);
+
+      if (data.status === 'pending' || data.status === 'processing') {
+        startPolling(data.care_plan_id);
+      }
     } catch (err) {
       setResult({ status: 'failed', care_plan: 'Network error: ' + err.message });
-    } finally {
       setLoading(false);
     }
   };
@@ -121,7 +161,7 @@ function App() {
         </section>
 
         <button type="submit" disabled={loading}>
-          {loading ? 'Generating Care Plan... (may take 10-20s)' : 'Submit Order'}
+          {loading ? 'Submitting...' : 'Submit Order'}
         </button>
       </form>
 
@@ -129,7 +169,10 @@ function App() {
         <div className={'result ' + result.status}>
           <h2>Care Plan</h2>
           <p className="order-id">Order ID: {result.id}</p>
-          <p className="status">Status: <span>{result.status}</span></p>
+          <p className="status">
+            Status: <span>{result.status}</span>
+            {polling && <span className="poll-indicator"> (checking every 3s... #{pollCount})</span>}
+          </p>
           {result.care_plan && <pre>{result.care_plan}</pre>}
         </div>
       )}

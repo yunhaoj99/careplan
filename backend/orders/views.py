@@ -1,12 +1,8 @@
-import redis
-from django.conf import settings
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .models import Patient, Provider, Order, CarePlan
-
-redis_client = redis.from_url(settings.REDIS_URL)
-QUEUE_NAME = 'careplan_queue'
+from .tasks import generate_care_plan
 
 
 @api_view(['POST'])
@@ -41,8 +37,8 @@ def create_order(request):
 
     care_plan = CarePlan.objects.create(order=order, status='pending')
 
-    # Push care_plan id into Redis queue for later processing
-    redis_client.lpush(QUEUE_NAME, care_plan.id)
+    # Celery handles queueing, delivery, and retry — one line replaces all manual Redis code
+    generate_care_plan.delay(care_plan.id)
 
     return Response({
         'id': order.id,
@@ -77,3 +73,16 @@ def get_order(request, order_id):
         'status': care_plan.status if care_plan else 'no care plan',
         'care_plan': care_plan.content if care_plan else '',
     })
+
+
+@api_view(['GET'])
+def get_careplan_status(request, careplan_id):
+    try:
+        care_plan = CarePlan.objects.get(id=careplan_id)
+    except CarePlan.DoesNotExist:
+        return Response({'error': 'CarePlan not found'}, status=404)
+
+    data = {'status': care_plan.status}
+    if care_plan.status in ('completed', 'failed'):
+        data['content'] = care_plan.content
+    return Response(data)
