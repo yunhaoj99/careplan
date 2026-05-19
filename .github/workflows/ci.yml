@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: careplan_test
+          POSTGRES_USER: careplan_user
+          POSTGRES_PASSWORD: careplan_pass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U careplan_user -d careplan_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    env:
+      DB_HOST: localhost
+      DB_NAME: careplan_test
+      DB_USER: careplan_user
+      DB_PASSWORD: careplan_pass
+      USE_MOCK_LLM: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        working-directory: ./backend
+        run: pip install -r requirements.txt
+
+      - name: Run migrations
+        working-directory: ./backend
+        run: python manage.py migrate
+
+      - name: Run tests
+        working-directory: ./backend
+        run: pytest --tb=short --cov=orders --cov-report=term-missing -v
