@@ -1,34 +1,110 @@
 import time
+from datetime import date
 
 import anthropic
 from django.conf import settings
+from django.utils import timezone
 
+from .exceptions import BlockError, WarningException
 from .models import Patient, Provider, Order, CarePlan
 
 
 # ── Order creation ──
 
 def create_order(validated_data):
-    patient, _ = Patient.objects.get_or_create(
-        mrn=validated_data['patient_mrn'],
-        defaults={
-            'first_name': validated_data['patient_first_name'],
-            'last_name': validated_data['patient_last_name'],
-            'dob': validated_data['patient_dob'],
-        },
-    )
+    warnings = []
+    confirm = validated_data.get('confirm', False)
 
-    provider, _ = Provider.objects.get_or_create(
-        npi=validated_data['provider_npi'],
-        defaults={
-            'name': validated_data['provider_name'],
-        },
-    )
+    npi = validated_data['provider_npi']
+    provider_name = validated_data['provider_name']
+    mrn = validated_data['patient_mrn']
+    first_name = validated_data['patient_first_name']
+    last_name = validated_data['patient_last_name']
+    dob = validated_data['patient_dob']
+    medication_name = validated_data['medication_name']
+
+    # ── Provider duplicate detection ──
+
+    existing_provider = Provider.objects.filter(npi=npi).first()
+    if existing_provider:
+        if existing_provider.name != provider_name:
+            raise BlockError(
+                message=f"NPI {npi} is already registered to '{existing_provider.name}', "
+                        f"but you submitted '{provider_name}'. "
+                        f"A single NPI cannot belong to two different providers.",
+                detail={'npi': npi, 'existing_name': existing_provider.name, 'submitted_name': provider_name},
+            )
+        provider = existing_provider
+    else:
+        provider = Provider.objects.create(name=provider_name, npi=npi)
+
+    # ── Patient duplicate detection ──
+
+    existing_patient = Patient.objects.filter(mrn=mrn).first()
+    if existing_patient:
+        mismatches = []
+        if existing_patient.first_name != first_name:
+            mismatches.append(f"first_name: DB='{existing_patient.first_name}' vs input='{first_name}'")
+        if existing_patient.last_name != last_name:
+            mismatches.append(f"last_name: DB='{existing_patient.last_name}' vs input='{last_name}'")
+        if str(existing_patient.dob) != str(dob):
+            mismatches.append(f"dob: DB='{existing_patient.dob}' vs input='{dob}'")
+
+        if mismatches:
+            warnings.append(
+                f"MRN {mrn} already exists but some fields differ: {'; '.join(mismatches)}. "
+                f"Using existing patient record."
+            )
+        patient = existing_patient
+    else:
+        same_name_patient = Patient.objects.filter(
+            first_name=first_name, last_name=last_name, dob=dob
+        ).first()
+        if same_name_patient:
+            warnings.append(
+                f"A patient named '{first_name} {last_name}' (DOB: {dob}) already exists "
+                f"with MRN '{same_name_patient.mrn}', but you submitted MRN '{mrn}'. "
+                f"This may be a duplicate patient."
+            )
+        patient = Patient.objects.create(
+            first_name=first_name, last_name=last_name, mrn=mrn, dob=dob
+        )
+
+    # ── Order duplicate detection ──
+
+    today = timezone.now().date()
+    same_day_order = Order.objects.filter(
+        patient=patient, medication_name=medication_name, created_at__date=today
+    ).exists()
+    if same_day_order:
+        raise BlockError(
+            message=f"Patient '{patient.first_name} {patient.last_name}' (MRN: {patient.mrn}) "
+                    f"already has an order for '{medication_name}' created today. "
+                    f"Duplicate orders on the same day are not allowed.",
+            detail={'mrn': patient.mrn, 'medication': medication_name, 'date': str(today)},
+        )
+
+    past_order = Order.objects.filter(
+        patient=patient, medication_name=medication_name
+    ).exists()
+    if past_order:
+        warnings.append(
+            f"Patient '{patient.first_name} {patient.last_name}' (MRN: {patient.mrn}) "
+            f"has a previous order for '{medication_name}' on a different day. "
+            f"Submit with confirm=true to proceed."
+        )
+
+    # ── If there are warnings and user hasn't confirmed, raise ──
+
+    if warnings and not confirm:
+        raise WarningException(warnings=warnings)
+
+    # ── All checks passed, create order ──
 
     order = Order.objects.create(
         patient=patient,
         provider=provider,
-        medication_name=validated_data['medication_name'],
+        medication_name=medication_name,
         primary_diagnosis=validated_data['primary_diagnosis'],
         additional_diagnoses=validated_data.get('additional_diagnoses', ''),
         medication_history=validated_data.get('medication_history', ''),
@@ -40,7 +116,7 @@ def create_order(validated_data):
     from .tasks import generate_care_plan
     generate_care_plan.delay(care_plan.id)
 
-    return {
+    result = {
         'id': order.id,
         'care_plan_id': care_plan.id,
         'patient_first_name': patient.first_name,
@@ -50,6 +126,9 @@ def create_order(validated_data):
         'status': care_plan.status,
         'care_plan': '',
     }
+    if warnings:
+        result['warnings'] = warnings
+    return result
 
 
 # ── Order query ──
